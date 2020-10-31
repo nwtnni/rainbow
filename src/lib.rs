@@ -3,9 +3,12 @@
 
 use std::array;
 use std::convert::TryFrom as _;
+use std::fs;
 use std::io;
+use std::slice;
 use std::mem;
 
+use byteorder::ReadBytesExt as _;
 use byteorder::WriteBytesExt as _;
 
 #[derive(thiserror::Error, Debug)]
@@ -40,6 +43,26 @@ pub struct Chain<const P: usize> {
 }
 
 impl<'mem, const P: usize> Table<'mem, P> {
+    pub fn read(file: &'mem mut fs::File) -> Result<Self, Error> {
+        let chain_count = file.read_u64::<byteorder::LittleEndian>()? as usize;
+        let chain_length = file.read_u64::<byteorder::LittleEndian>()? as usize;
+        let chains = unsafe {
+            slice::from_raw_parts(
+                memmap::MmapOptions::new()
+                    .offset(16)
+                    .map(file)?
+                    .as_ptr()
+                    as *const Chain<P>,
+                chain_count,
+            )
+        };
+
+        Ok(Table {
+            length: chain_length,
+            chains,
+        })
+    }
+
     /// Using `seeds` as the start of each chain, write a rainbow table of chain length `length`
     /// to output buffer `writer`.
     pub fn write<W, S>(mut writer: W, seeds: &[S], length: usize) -> Result<(), Error>
