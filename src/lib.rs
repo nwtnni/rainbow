@@ -6,6 +6,8 @@ use std::convert::TryFrom as _;
 use std::io;
 use std::mem;
 
+use byteorder::WriteBytesExt as _;
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("I/O error")]
@@ -20,7 +22,11 @@ pub enum Error {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Table<'mem, const P: usize>(&'mem [Chain<P>]);
+pub struct Table<'mem, const P: usize> {
+    /// Length of each chain, i.e. the number of reduction + hash cycles performed
+    length: usize,
+    chains: &'mem [Chain<P>],
+}
 
 #[repr(C)]
 #[repr(align(8))]
@@ -34,10 +40,12 @@ pub struct Chain<const P: usize> {
 }
 
 impl<'mem, const P: usize> Table<'mem, P> {
-    pub fn write<'password, W, S>(mut writer: W, seeds: S, length: usize) -> Result<(), Error>
+    /// Using `seeds` as the start of each chain, write a rainbow table of chain length `length`
+    /// to output buffer `writer`.
+    pub fn write<W, S>(mut writer: W, seeds: &[S], length: usize) -> Result<(), Error>
     where
         W: io::Write,
-        S: IntoIterator<Item = &'password [u8]>,
+        S: AsRef<[u8]>,
     {
         let align = mem::align_of::<Chain<P>>();
         let padding = match P % align {
@@ -45,20 +53,24 @@ impl<'mem, const P: usize> Table<'mem, P> {
         | bytes => vec![0; align - bytes],
         };
 
+        writer.write_u64::<byteorder::LittleEndian>(seeds.len() as u64)?;
+        writer.write_u64::<byteorder::LittleEndian>(length as u64)?;
+
         for seed in seeds {
-            let mut pass = <&'password [u8; P]>::try_from(seed)
+            let mut pass = <&[u8; P]>::try_from(seed.as_ref())
                 .copied()
                 .map_err(|source| Error::PasswordLength { expected: P, source })?;
 
             let mut hash = md5::compute(&pass).0;
+
+            writer.write_all(&pass)?;
+            writer.write_all(&padding)?;
 
             for reduction in 0..length {
                 pass = Self::reduce(reduction, hash);
                 hash = md5::compute(pass).0;
             }
 
-            writer.write_all(&pass)?;
-            writer.write_all(&padding)?;
             writer.write_all(&hash)?;
         }
 
@@ -68,11 +80,11 @@ impl<'mem, const P: usize> Table<'mem, P> {
     fn reduce(reduction: usize, hash: [u8; 16]) -> [u8; P] {
         assert!(P <= 16, "This project does not support plaintext passwords longer than 16 bytes.");
 
-        let hash = u128::from_be_bytes(hash);
+        let hash = u128::from_le_bytes(hash);
         let pass = reduction as u128 + hash % 8u128.pow(P as u32);
 
         let mut reduced = [0; P];
-        for (src, dst) in pass.to_be_bytes().iter().zip(&mut reduced) {
+        for (src, dst) in pass.to_le_bytes().iter().zip(&mut reduced) {
             *dst = *src;
         }
         reduced
