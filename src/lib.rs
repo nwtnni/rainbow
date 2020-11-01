@@ -4,10 +4,13 @@
 use std::array;
 use std::convert::TryFrom as _;
 use std::io;
+use std::io::Write as _;
 use std::mem;
 
 use byteorder::ReadBytesExt as _;
 use byteorder::WriteBytesExt as _;
+use crossbeam::channel;
+use rayon::prelude::*;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -70,33 +73,66 @@ impl<const P: usize> Table<P> {
     /// to output buffer `writer`.
     pub fn write<W, S>(mut writer: W, seeds: &[S], length: usize) -> Result<(), Error>
     where
-        W: io::Write,
-        S: AsRef<[u8]>,
+        W: Send + io::Write,
+        S: Sync + AsRef<[u8]>,
     {
-        let padding = Self::padding();
+        crossbeam::scope(|scope| {
+            let (tx, rx) = channel::bounded::<Chain<P>>(100);
 
-        writer.write_u64::<byteorder::LittleEndian>(seeds.len() as u64)?;
-        writer.write_u64::<byteorder::LittleEndian>(length as u64)?;
+            scope.spawn(move |_| -> Result<_, Error> {
+                writer.write_u64::<byteorder::LittleEndian>(seeds.len() as u64)?;
+                writer.write_u64::<byteorder::LittleEndian>(length as u64)?;
 
-        for (index, seed) in seeds.iter().enumerate() {
-            println!("Generating chain {}/{}...", index, seeds.len());
+                let padding = Self::padding();
+                let stdout = io::stdout();
+                let mut stdout = stdout.lock();
+                let mut counter = 0;
 
-            let mut pass = <&[u8; P]>::try_from(seed.as_ref())
-                .copied()
-                .map_err(|source| Error::PasswordLength { expected: P, source })?;
+                while let Ok(chain) = rx.recv() {
+                    counter += 1;
+                    writer.write_all(&chain.pass)?;
+                    writer.write_all(&padding)?;
+                    writer.write_all(&chain.hash)?;
+                    write!(
+                        &mut stdout,
+                        "\x1B[2K\x1B[1GGenerating chain {}/{} ({:.2}%)...",
+                        counter,
+                        seeds.len(),
+                        (counter as f32 / seeds.len() as f32) * 100.0,
+                    )?;
+                    stdout.flush()?;
+                }
 
-            let mut hash = md5::compute(&pass).0;
+                Ok(())
+            });
 
-            writer.write_all(&pass)?;
-            writer.write_all(&padding)?;
+            seeds
+                .par_iter()
+                .for_each(|seed| {
+                    let tx = tx.clone();
 
-            for reduction in 0..length {
-                pass = Self::reduce(reduction, hash);
-                hash = md5::compute(pass).0;
-            }
+                    // TODO: push responsibility for validating length to caller
+                    let mut pass = <&[u8; P]>::try_from(seed.as_ref())
+                        .copied()
+                        .map_err(|source| Error::PasswordLength { expected: P, source })
+                        .unwrap();
 
-            writer.write_all(&hash)?;
-        }
+                    let mut hash = md5::compute(&pass).0;
+                    let mut chain = Chain {
+                        pass,
+                        hash,
+                    };
+
+                    for reduction in 0..length {
+                        pass = Self::reduce(reduction, hash);
+                        hash = md5::compute(pass).0;
+                    }
+
+                    chain.hash = hash;
+                    tx.send(chain).expect("[INTERNAL ERROR]: reciever dropped");
+                })
+
+        }).expect("[INTERNAL ERROR]: chain generation panicked");
 
         Ok(())
     }
