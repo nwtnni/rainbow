@@ -78,7 +78,9 @@ impl<const P: usize> Table<P> {
         writer.write_u64::<byteorder::LittleEndian>(seeds.len() as u64)?;
         writer.write_u64::<byteorder::LittleEndian>(length as u64)?;
 
-        for seed in seeds {
+        for (index, seed) in seeds.iter().enumerate() {
+            println!("Generating chain {}/{}...", index, seeds.len());
+
             let mut pass = <&[u8; P]>::try_from(seed.as_ref())
                 .copied()
                 .map_err(|source| Error::PasswordLength { expected: P, source })?;

@@ -1,3 +1,4 @@
+use std::convert::TryFrom as _;
 use std::fs;
 use std::io;
 use std::path;
@@ -7,6 +8,8 @@ use std::str;
 use anyhow::anyhow;
 use anyhow::Context as _;
 use structopt::StructOpt;
+
+static SEEDS: &str = include_str!("../data/passwords-08.txt");
 
 #[derive(StructOpt)]
 enum Command {
@@ -48,9 +51,11 @@ fn from_hex(string: &str) -> anyhow::Result<[u8; 16]> {
 fn main() -> anyhow::Result<()> {
     match Command::from_args() {
     | Command::Create { chain_count, chain_length, path } => {
-        let seeds = (0..chain_count)
-            .map(|seed| seed as u64)
-            .map(|seed| seed.to_le_bytes())
+        let seeds = SEEDS
+            .split_whitespace()
+            .map(|seed| seed.as_bytes())
+            .map(|seed| <&[u8; 8]>::try_from(seed).unwrap())
+            .take(chain_count)
             .collect::<Vec<_>>();
 
         let mut file = fs::OpenOptions::new()
