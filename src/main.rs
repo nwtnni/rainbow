@@ -75,8 +75,8 @@ fn main() -> anyhow::Result<()> {
         | None => process::exit(1),
         | Some(pass) => {
             match str::from_utf8(&pass) {
-            | Ok(string) => println!("{}", string),
-            | Err(_) => println!("{:X?}", pass),
+            | Ok(string) if string.chars().all(|char| char.is_ascii_alphanumeric()) => println!("{}", string),
+            | _ => println!("{:X?}", pass),
             }
         }
         }
