@@ -6,6 +6,7 @@ use std::convert::TryFrom as _;
 use std::io;
 use std::io::Write as _;
 use std::mem;
+use std::sync::atomic;
 
 use byteorder::ReadBytesExt as _;
 use byteorder::WriteBytesExt as _;
@@ -138,26 +139,38 @@ impl<const P: usize> Table<P> {
     }
 
     pub fn get(&self, target: [u8; 16]) -> Option<[u8; P]> {
-        for start in (0..self.length).rev() {
-            let mut pass;
-            let mut hash = target;
+        let found = atomic::AtomicBool::new(false);
+        let (tx, rx) = channel::unbounded();
 
-            for reduction in start..self.length {
-                pass = Self::reduce(reduction, hash);
-                hash = md5::compute(pass).0;
-            }
+        (0..self.length)
+            .into_par_iter()
+            .rev()
+            .for_each(|start| {
+                if found.load(atomic::Ordering::SeqCst) {
+                    return;
+                }
 
-            if let Some(pass) = self
-                .chains
-                .iter()
-                .filter(|chain| chain.hash == hash)
-                .filter_map(|chain| self.walk(chain, target))
-                .next()
-            {
-                return Some(pass);
-            }
-        }
-        None
+                let mut pass;
+                let mut hash = target;
+
+                for reduction in start..self.length {
+                    pass = Self::reduce(reduction, hash);
+                    hash = md5::compute(pass).0;
+                }
+
+                if let Some(pass) = self
+                    .chains
+                    .iter()
+                    .filter(|chain| chain.hash == hash)
+                    .filter_map(|chain| self.walk(chain, target))
+                    .next()
+                {
+                    found.store(true, atomic::Ordering::SeqCst);
+                    tx.send(pass).expect("[INTERNAL ERROR]: receiver dropped");
+                }
+            });
+
+        rx.try_recv().ok()
     }
 
     fn walk(&self, chain: &Chain<P>, target: [u8; 16]) -> Option<[u8; P]> {
