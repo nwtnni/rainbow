@@ -25,10 +25,10 @@ pub enum Error {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Table<'mem, const P: usize> {
+pub struct Table<'file, const P: usize> {
     /// Length of each chain, i.e. the number of reduction + hash cycles performed
     length: usize,
-    chains: &'mem [Chain<P>],
+    chains: &'file [Chain<P>],
 }
 
 #[repr(C)]
@@ -42,8 +42,8 @@ pub struct Chain<const P: usize> {
     hash: [u8; 16],
 }
 
-impl<'mem, const P: usize> Table<'mem, P> {
-    pub fn read(file: &'mem mut fs::File) -> Result<Self, Error> {
+impl<'file, const P: usize> Table<'file, P> {
+    pub fn read(file: &'file mut fs::File) -> Result<Self, Error> {
         let chain_count = file.read_u64::<byteorder::LittleEndian>()? as usize;
         let chain_length = file.read_u64::<byteorder::LittleEndian>()? as usize;
         let chains = unsafe {
@@ -98,6 +98,44 @@ impl<'mem, const P: usize> Table<'mem, P> {
         }
 
         Ok(())
+    }
+
+    pub fn get(&self, target: [u8; 16]) -> Option<[u8; P]> {
+        for start in (0..self.length).rev() {
+            let mut pass;
+            let mut hash = target;
+
+            for reduction in start..self.length {
+                pass = Self::reduce(reduction, hash);
+                hash = md5::compute(pass).0;
+            }
+
+            if let Some(pass) = self
+                .chains
+                .iter()
+                .filter(|chain| chain.hash == hash)
+                .filter_map(|chain| self.walk(chain, target))
+                .next()
+            {
+                return Some(pass);
+            }
+        }
+        None
+    }
+
+    fn walk(&self, chain: &Chain<P>, target: [u8; 16]) -> Option<[u8; P]> {
+        let mut pass = chain.pass;
+        let mut hash = md5::compute(pass).0;
+
+        for reduction in 0..self.length {
+            if hash == target {
+                return Some(pass);
+            }
+            pass = Self::reduce(reduction, hash);
+            hash = md5::compute(pass).0;
+        }
+
+        None
     }
 
     fn reduce(reduction: usize, hash: [u8; 16]) -> [u8; P] {
