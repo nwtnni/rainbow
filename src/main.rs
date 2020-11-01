@@ -38,8 +38,10 @@ enum Command {
 }
 
 fn from_hex(string: &str) -> anyhow::Result<[u8; 16]> {
+    // Elsewhere, we use little-endian byte order, but the input hash
+    // will be big-endian. We do a swap here in order to correct this.
     u128::from_str_radix(string, 16)
-        .map(u128::to_le_bytes)
+        .map(u128::to_be_bytes)
         .with_context(|| anyhow!("Expected MD5 sum in hexadecimal notation, but found: '{}'", string))
 }
 
