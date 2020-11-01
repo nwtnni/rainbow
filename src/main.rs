@@ -64,7 +64,8 @@ fn main() -> anyhow::Result<()> {
         let mut file = fs::OpenOptions::new()
             .read(true)
             .open(&path)
-            .with_context(|| anyhow!("Could not open file for reading: '{}'", path.display()))?;
+            .with_context(|| anyhow!("Could not open file for reading: '{}'", path.display()))
+            .map(io::BufReader::new)?;
 
         let table = rainbow::Table::<8>::read(&mut file)?;
 

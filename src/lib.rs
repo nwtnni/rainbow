@@ -3,9 +3,7 @@
 
 use std::array;
 use std::convert::TryFrom as _;
-use std::fs;
 use std::io;
-use std::slice;
 use std::mem;
 
 use byteorder::ReadBytesExt as _;
@@ -24,11 +22,11 @@ pub enum Error {
     },
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct Table<'file, const P: usize> {
+#[derive(Clone, Debug)]
+pub struct Table<const P: usize> {
     /// Length of each chain, i.e. the number of reduction + hash cycles performed
     length: usize,
-    chains: &'file [Chain<P>],
+    chains: Vec<Chain<P>>,
 }
 
 #[repr(C)]
@@ -42,20 +40,25 @@ pub struct Chain<const P: usize> {
     hash: [u8; 16],
 }
 
-impl<'file, const P: usize> Table<'file, P> {
-    pub fn read(file: &'file mut fs::File) -> Result<Self, Error> {
-        let chain_count = file.read_u64::<byteorder::LittleEndian>()? as usize;
-        let chain_length = file.read_u64::<byteorder::LittleEndian>()? as usize;
-        let chains = unsafe {
-            slice::from_raw_parts(
-                memmap::MmapOptions::new()
-                    .offset(16)
-                    .map(file)?
-                    .as_ptr()
-                    as *const Chain<P>,
-                chain_count,
-            )
-        };
+impl<const P: usize> Table<P> {
+    pub fn read<R: io::Read>(mut reader: R) -> Result<Self, Error> {
+        let chain_count = reader.read_u64::<byteorder::LittleEndian>()? as usize;
+        let chain_length = reader.read_u64::<byteorder::LittleEndian>()? as usize;
+        let mut chains = Vec::with_capacity(chain_count);
+
+        let mut pass = [0; P];
+        let mut padding = Self::padding();
+        let mut hash = [0; 16];
+
+        for _ in 0..chain_count {
+            reader.read_exact(&mut pass)?;
+            reader.read_exact(&mut padding)?;
+            reader.read_exact(&mut hash)?;
+            chains.push(Chain {
+                pass,
+                hash,
+            });
+        }
 
         Ok(Table {
             length: chain_length,
@@ -70,11 +73,7 @@ impl<'file, const P: usize> Table<'file, P> {
         W: io::Write,
         S: AsRef<[u8]>,
     {
-        let align = mem::align_of::<Chain<P>>();
-        let padding = match P % align {
-        | 0 => vec![],
-        | bytes => vec![0; align - bytes],
-        };
+        let padding = Self::padding();
 
         writer.write_u64::<byteorder::LittleEndian>(seeds.len() as u64)?;
         writer.write_u64::<byteorder::LittleEndian>(length as u64)?;
@@ -142,12 +141,20 @@ impl<'file, const P: usize> Table<'file, P> {
         assert!(P <= 16, "This project does not support plaintext passwords longer than 16 bytes.");
 
         let hash = u128::from_le_bytes(hash);
-        let pass = reduction as u128 + hash % 8u128.pow(P as u32);
+        let pass = reduction as u128 + (hash >> (128 - (8 * P)));
 
         let mut reduced = [0; P];
         for (src, dst) in pass.to_le_bytes().iter().zip(&mut reduced) {
             *dst = *src;
         }
         reduced
+    }
+
+    fn padding() -> Vec<u8> {
+        let align = mem::align_of::<Chain<P>>();
+        match P % align {
+        | 0 => vec![],
+        | bytes => vec![0; align - bytes],
+        }
     }
 }
