@@ -144,8 +144,10 @@ impl<const P: usize> Table<P> {
         let pass = reduction as u128 + (hash >> (128 - (8 * P)));
 
         let mut reduced = [0; P];
-        for (src, dst) in pass.to_le_bytes().iter().zip(&mut reduced) {
-            *dst = *src;
+        for (dst, src) in reduced.iter_mut().zip(&pass.to_le_bytes()) {
+            // Add 31 to ignore ASCII control characters
+            // Mask off top bit to ensure valid ASCII
+            *dst = (*src + 0b0001_1111) & 0b0111_1111;
         }
         reduced
     }
