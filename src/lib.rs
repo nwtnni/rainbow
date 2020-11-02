@@ -5,7 +5,6 @@ use std::array;
 use std::convert::TryFrom as _;
 use std::io;
 use std::io::Write as _;
-use std::mem;
 use std::sync::atomic;
 
 use byteorder::ReadBytesExt as _;
@@ -33,8 +32,6 @@ pub struct Table<const P: usize> {
     chains: Vec<Chain<P>>,
 }
 
-#[repr(C)]
-#[repr(align(8))]
 #[derive(Copy, Clone, Debug)]
 pub struct Chain<const P: usize> {
     /// The first plaintext password (of length P) in the chain
@@ -51,12 +48,10 @@ impl<const P: usize> Table<P> {
         let mut chains = Vec::with_capacity(chain_count);
 
         let mut pass = [0; P];
-        let mut padding = Self::padding();
         let mut hash = [0; 16];
 
         for _ in 0..chain_count {
             reader.read_exact(&mut pass)?;
-            reader.read_exact(&mut padding)?;
             reader.read_exact(&mut hash)?;
             chains.push(Chain {
                 pass,
@@ -84,7 +79,6 @@ impl<const P: usize> Table<P> {
                 writer.write_u64::<byteorder::LittleEndian>(seeds.len() as u64)?;
                 writer.write_u64::<byteorder::LittleEndian>(length as u64)?;
 
-                let padding = Self::padding();
                 let stdout = io::stdout();
                 let mut stdout = stdout.lock();
                 let mut counter = 0;
@@ -92,7 +86,6 @@ impl<const P: usize> Table<P> {
                 while let Ok(chain) = rx.recv() {
                     counter += 1;
                     writer.write_all(&chain.pass)?;
-                    writer.write_all(&padding)?;
                     writer.write_all(&chain.hash)?;
                     write!(
                         &mut stdout,
@@ -209,13 +202,5 @@ impl<const P: usize> Table<P> {
             *dst = TABLE[(*src & 0b0011_1111) as usize];
         }
         reduced
-    }
-
-    fn padding() -> Vec<u8> {
-        let align = mem::align_of::<Chain<P>>();
-        match P % align {
-        | 0 => vec![],
-        | bytes => vec![0; align - bytes],
-        }
     }
 }
