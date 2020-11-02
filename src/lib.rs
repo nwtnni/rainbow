@@ -1,7 +1,6 @@
 #![feature(min_const_generics)]
 #![feature(result_copied)]
 
-use std::array;
 use std::convert::TryFrom as _;
 use std::io;
 use std::io::Write as _;
@@ -10,19 +9,6 @@ use byteorder::ReadBytesExt as _;
 use byteorder::WriteBytesExt as _;
 use crossbeam::channel;
 use rayon::prelude::*;
-
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("I/O error")]
-    IO(#[from] io::Error),
-
-    #[error("Expected plaintext password of length {}", expected)]
-    PasswordLength {
-        expected: usize,
-        #[source]
-        source: array::TryFromSliceError,
-    },
-}
 
 #[derive(Clone, Debug)]
 pub struct Table<const P: usize> {
@@ -41,7 +27,7 @@ pub struct Chain<const P: usize> {
 }
 
 impl<const P: usize> Table<P> {
-    pub fn read<R: io::Read>(mut reader: R) -> Result<Self, Error> {
+    pub fn read<R: io::Read>(mut reader: R) -> io::Result<Self> {
         let chain_count = reader.read_u64::<byteorder::LittleEndian>()? as usize;
         let chain_length = reader.read_u64::<byteorder::LittleEndian>()? as usize;
         let mut chains = Vec::with_capacity(chain_count);
@@ -66,7 +52,7 @@ impl<const P: usize> Table<P> {
 
     /// Using `seeds` as the start of each chain, write a rainbow table of chain length `length`
     /// to output buffer `writer`.
-    pub fn write<W, S>(mut writer: W, seeds: &[S], length: usize) -> Result<(), Error>
+    pub fn write<W, S>(mut writer: W, seeds: &[S], length: usize) -> io::Result<()>
     where
         W: Send + io::Write,
         S: Sync + AsRef<[u8]>,
@@ -74,7 +60,7 @@ impl<const P: usize> Table<P> {
         crossbeam::scope(|scope| {
             let (tx, rx) = channel::bounded::<Chain<P>>(100);
 
-            scope.spawn(move |_| -> Result<_, Error> {
+            scope.spawn(move |_| -> io::Result<()> {
                 writer.write_u64::<byteorder::LittleEndian>(seeds.len() as u64)?;
                 writer.write_u64::<byteorder::LittleEndian>(length as u64)?;
 
@@ -101,28 +87,22 @@ impl<const P: usize> Table<P> {
 
             seeds
                 .par_iter()
-                .for_each(|seed| {
-                    let tx = tx.clone();
-
+                .map(|seed| {
                     // TODO: push responsibility for validating length to caller
-                    let mut pass = <&[u8; P]>::try_from(seed.as_ref())
+                    <&[u8; P]>::try_from(seed.as_ref())
                         .copied()
-                        .map_err(|source| Error::PasswordLength { expected: P, source })
-                        .unwrap();
-
+                        .expect("Provided seed has incorrect length")
+                })
+                .for_each(|seed| {
+                    let mut pass = seed;
                     let mut hash = md5::compute(&pass).0;
-                    let mut chain = Chain {
-                        pass,
-                        hash,
-                    };
 
                     for reduction in 0..length {
                         pass = Self::reduce(reduction, hash);
                         hash = md5::compute(pass).0;
                     }
 
-                    chain.hash = hash;
-                    tx.send(chain).expect("[INTERNAL ERROR]: reciever dropped");
+                    tx.send(Chain { pass: seed, hash }).expect("[INTERNAL ERROR]: reciever dropped");
                 })
 
         }).expect("[INTERNAL ERROR]: chain generation panicked");
