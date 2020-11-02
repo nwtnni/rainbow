@@ -5,7 +5,6 @@ use std::array;
 use std::convert::TryFrom as _;
 use std::io;
 use std::io::Write as _;
-use std::sync::atomic;
 
 use byteorder::ReadBytesExt as _;
 use byteorder::WriteBytesExt as _;
@@ -132,17 +131,10 @@ impl<const P: usize> Table<P> {
     }
 
     pub fn get(&self, target: [u8; 16]) -> Option<[u8; P]> {
-        let found = atomic::AtomicBool::new(false);
-        let (tx, rx) = channel::unbounded();
-
         (0..self.length)
             .into_par_iter()
             .rev()
-            .for_each(|start| {
-                if found.load(atomic::Ordering::SeqCst) {
-                    return;
-                }
-
+            .find_map_any(|start| {
                 let mut pass;
                 let mut hash = target;
 
@@ -151,19 +143,12 @@ impl<const P: usize> Table<P> {
                     hash = md5::compute(pass).0;
                 }
 
-                if let Some(pass) = self
-                    .chains
+                self.chains
                     .iter()
                     .filter(|chain| chain.hash == hash)
                     .filter_map(|chain| self.walk(chain, target))
                     .next()
-                {
-                    found.store(true, atomic::Ordering::SeqCst);
-                    tx.send(pass).expect("[INTERNAL ERROR]: receiver dropped");
-                }
-            });
-
-        rx.try_recv().ok()
+            })
     }
 
     fn walk(&self, chain: &Chain<P>, target: [u8; 16]) -> Option<[u8; P]> {
