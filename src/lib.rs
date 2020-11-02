@@ -196,22 +196,17 @@ impl<const P: usize> Table<P> {
 
         let mut reduced = [0; P];
         for (dst, src) in reduced.iter_mut().zip(&pass.to_le_bytes()) {
-            static TABLE: [u8; 95] = [
+            static TABLE: [u8; 64] = [
                 b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i', b'j', b'k', b'l', b'm',
                 b'n', b'o', b'p', b'q', b'r', b's', b't', b'u', b'v', b'w', b'x', b'y', b'z',
 
                 b'A', b'B', b'C', b'D', b'E', b'F', b'G', b'H', b'I', b'J', b'K', b'L', b'M',
                 b'N', b'O', b'P', b'Q', b'R', b'S', b'T', b'U', b'V', b'W', b'X', b'Y', b'Z',
 
-                b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9',
-
-                // https://owasp.org/www-community/password-special-characters
-                b' ', b'!', b'"', b'#', b'$', b'%', b'&', b'\'', b'(', b')', b'*',
-                b'+', b',', b'-', b'.', b'/', b':', b';', b'<', b'=', b'>', b'?',
-                b'@', b'[', b'\\', b']', b'^', b'_', b'`', b'{', b'|', b'}', b'~',
+                b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'_', b'.',
             ];
 
-            *dst = TABLE[(*src % 95) as usize];
+            *dst = TABLE[(*src & 0b0011_1111) as usize];
         }
         reduced
     }
