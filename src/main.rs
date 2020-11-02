@@ -11,6 +11,11 @@ use anyhow::anyhow;
 use anyhow::Context as _;
 use structopt::StructOpt;
 
+// TODO: read seed data dynamically
+//
+// Seed data could also be procedurally generated, as the bulk of the
+// rainbow table entries are more or less random, and will cover any
+// hand-selected seed values given enough chains and chain length.
 static SEEDS_05: &str = include_str!("../data/passwords-05.txt");
 static SEEDS_06: &str = include_str!("../data/passwords-06.txt");
 
@@ -26,7 +31,7 @@ enum Command {
         #[structopt(long)]
         chain_length: usize,
 
-        /// Length of encoded passwords in bytes
+        /// Length of plaintexts to store in table in bytes
         #[structopt(long)]
         pass_length: usize,
 
@@ -41,7 +46,7 @@ enum Command {
         #[structopt(short, long)]
         path: path::PathBuf,
 
-        /// Length of encoded passwords in bytes
+        /// Length of stored plaintexts in table in bytes
         #[structopt(long)]
         pass_length: usize,
 
