@@ -1,7 +1,6 @@
 #![feature(min_const_generics)]
 #![feature(result_copied)]
 
-use std::convert::TryFrom as _;
 use std::io;
 use std::io::Write as _;
 
@@ -69,11 +68,7 @@ impl<const P: usize> Table<P> {
     ///
     /// Unfortunately, it does not include the plaintext length: because we're using const
     /// generics for array length, the plaintext length must be known before we call `Table::read`.
-    pub fn write<W, S>(mut writer: W, seeds: &[S], length: usize) -> io::Result<()>
-    where
-        W: Send + io::Write,
-        S: Sync + AsRef<[u8]>,
-    {
+    pub fn write<W: io::Write + Send>(mut writer: W, seeds: &[&[u8; P]], length: usize) -> io::Result<()> {
         crossbeam::scope(|scope| {
             // Arbitrary channel capacity for backpressure
             let (tx, rx) = channel::bounded::<Chain<P>>(100);
@@ -111,13 +106,7 @@ impl<const P: usize> Table<P> {
             // The initial value and final hash are sent to the writer thread for serialization.
             seeds
                 .par_iter()
-                .map(|seed| {
-                    // TODO: push responsibility for validating length to caller
-                    <&[u8; P]>::try_from(seed.as_ref())
-                        .copied()
-                        .expect("Provided seed has incorrect length")
-                })
-                .for_each(|seed| {
+                .for_each(|&&seed| {
                     let mut pass = seed;
                     let mut hash = md5::compute(&pass).0;
 
