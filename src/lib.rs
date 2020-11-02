@@ -1,6 +1,7 @@
 #![feature(min_const_generics)]
 #![feature(result_copied)]
 
+use std::collections::HashMap;
 use std::io;
 use std::io::Write as _;
 
@@ -13,7 +14,7 @@ use rayon::prelude::*;
 pub struct Table<const P: usize> {
     /// Length of each chain, i.e. the number of reduction + hash cycles performed
     length: usize,
-    chains: Vec<Chain<P>>,
+    chains: HashMap<[u8; 16], [u8; P]>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -30,10 +31,13 @@ impl<const P: usize> Table<P> {
     ///
     /// Note: the generic type argument `P` must match the plaintext length stored in `reader`,
     /// or else all lookups will quietly fail (i.e. without errors).
+    ///
+    /// There may be fewer than `chain_count` chains at the end of deserialization, since we
+    /// merge colliding chains into a `HashMap`.
     pub fn read<R: io::Read>(mut reader: R) -> io::Result<Self> {
         let chain_count = reader.read_u64::<byteorder::LittleEndian>()? as usize;
         let chain_length = reader.read_u64::<byteorder::LittleEndian>()? as usize;
-        let mut chains = Vec::with_capacity(chain_count);
+        let mut chains = HashMap::with_capacity(chain_count);
 
         let mut pass = [0; P];
         let mut hash = [0; 16];
@@ -41,10 +45,7 @@ impl<const P: usize> Table<P> {
         for _ in 0..chain_count {
             reader.read_exact(&mut pass)?;
             reader.read_exact(&mut hash)?;
-            chains.push(Chain {
-                pass,
-                hash,
-            });
+            chains.insert(hash, pass);
         }
 
         Ok(Table {
@@ -160,14 +161,14 @@ impl<const P: usize> Table<P> {
                 }
 
                 self.chains
-                    .iter()
-                    .filter(|chain| chain.hash == hash)
-                    .filter_map(|chain| self.walk(chain, target))
-                    .next()
+                    .get(&hash)
+                    .copied()
+                    .and_then(|pass| self.walk(pass, target))
             })
     }
 
-    /// Given a candidate `chain`, find the plaintext in the chain that hashes to `target`, if it exists.
+    /// Given a candidate chain beginning with `pass`, find the plaintext in the chain that
+    /// hashes to `target`, if it exists.
     ///
     /// Like chain construction, we walk along the chain by alternating hashing and reduction
     /// functions, starting from `chain.pass`. If a hash matches the target hash, then we can
@@ -179,8 +180,7 @@ impl<const P: usize> Table<P> {
     /// +--------+         +--------+          +--------+         +--------+           +--------+         +--------+
     /// chain.pass                                                                       return             target
     /// ```
-    fn walk(&self, chain: &Chain<P>, target: [u8; 16]) -> Option<[u8; P]> {
-        let mut pass = chain.pass;
+    fn walk(&self, mut pass: [u8; P], target: [u8; 16]) -> Option<[u8; P]> {
         let mut hash = md5::compute(pass).0;
 
         for reduction in 0..self.length {
